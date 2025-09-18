@@ -1,0 +1,31 @@
+# --- Core server stack ---
+Flask==3.0.3
+Flask-SocketIO==5.3.6
+gunicorn==23.0.0
+eventlet==0.40.3
+
+# --- AI APIs ---
+openai==1.96.0
+
+# --- Google Cloud clients ---
+google-cloud-texttospeech==2.27.0
+google-cloud-speech==2.26.0
+google-cloud-translate==3.21.1
+google-cloud-dialogflow==2.30.0
+google-api-python-client==2.126.0
+google-api-core==2.18.0
+google-auth==2.29.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.0
+googleapis-common-protos==1.63.0
+grpcio==1.62.1
+grpcio-status==1.62.1
+proto-plus==1.23.0
+protobuf==4.25.3
+httplib2==0.22.0
+
+# --- Utilities ---
+requests==2.31.0
+httpx==0.28.1
+python-dotenv==1.1.1
+bidict==0.23.1

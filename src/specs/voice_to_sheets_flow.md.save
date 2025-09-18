@@ -1,0 +1,62 @@
+```mermaid
+flowchart TD
+  A[Client (voice/text)] -->|POST /ask-gpt| B[Flask app (app.py)]
+  B --> C[handle_session_text (router.py)]
+  C -->|Spreadsheet session + match| D[call_sheets_action(action, params)]
+  C -->|No match| G[chat_with_gpt(prompt)]
+  D --> E[/sheet-action endpoint/]
+  E --> F[sheet_action route (app.py)]
+  F --> H[_route_sheet_action adapter]
+  H -->|BoldHeader| I[apply_bold_header(spreadsheet_id, sheet_title, header_row)]
+  H -->|UnboldHeader| J[remove_bold_header(spreadsheet_id, sheet_title, header_row)]
+  I --> K[(Google Sheets API)]
+  J --> K
+  K --> L[Return ok/error]
+  L --> F --> D --> C --> B --> A
+
+
+
+---
+
+### ✅ Fixed Sequence Diagram (GitHub-safe)
+```markdown
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Client
+  participant Flask as Flask (/ask-gpt)
+  participant Router as handle_session_text
+  participant Helper as call_sheets_action
+  participant Hook as /sheet-action
+  participant Adapter as _route_sheet_action
+  participant Sheets as Google Sheets API
+
+  Client->>Flask: POST /ask-gpt {"text":"bold header"}
+  Flask->>Router: handle_session_text(prompt)
+  Router-->>Router: check session.type == SPREADSHEET
+  Router->>Helper: call_sheets_action("BoldHeader", {"row_number":1})
+  Helper->>Hook: POST /sheet-action {"action":"BoldHeader", ...}
+  Hook->>Adapter: normalize payload
+  Adapter->>Sheets: apply_bold_header(spreadsheet_id, sheet_title, header_row)
+  Sheets-->>Adapter: success / error
+  Adapter-->>Hook: {"status":"ok" | "error"}
+  Hook-->>Helper: response JSON
+  Helper-->>Router: handled, reply
+  Router-->>Flask: return reply
+  Flask-->>Client: {"reply":"Okay—done."}
+---
+
+## ✅ Milestone: Voice → Sheets Action (Bold/Unbold Header v1)
+
+**Date:** 2025-09-07
+
+This marks the first complete end-to-end action cycle from **voice input** to **Google Sheets mutation**:
+
+- **Session control working:** Spreadsheet sessions can be started/stopped via `/control-hook`.
+- **Routing fixed:** While in spreadsheet mode, voice bypasses Dialogflow and is handled by the router.
+- **Intent resolution added:** Handles `"bold header"` and `"unbold header"` (including ASR mis-hears like “on bold”).
+- **Action execution confirmed:** Requests reach Google Sheets API (`batchUpdate`) and toggle header formatting.
+- **End-to-end test passed:**  
+  Voice → Flask → Router → Intent normalization → `/sheet-action` → Google Sheets API → Bold/Unbold applied → Bot responds “Okay—done.”
+
+This is the **first loop-closure milestone**: a spoken command visibly updates a Google Sheet in real time.

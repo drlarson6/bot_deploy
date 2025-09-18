@@ -1,0 +1,10 @@
+runtime: python39
+entrypoint: gunicorn -b :$PORT app:app
+
+env_variables:
+  GOOGLE_CLOUD_PROJECT: ['intent-agent-9xeu']
+  # Add other environment variables here
+
+handlers:
+- url: /.*
+  script: auto

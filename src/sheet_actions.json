@@ -1,0 +1,80 @@
+[
+  {
+    "name": "BoldHeader",
+    "description": "Make the first row bold and centered.",
+    "inputs": ["tab", "row_number"],
+    "provider_method": "repeatCell"
+  },
+  {
+    "name": "FormatAsCurrency",
+    "description": "Format a numeric column to show as currency.",
+    "inputs": ["tab", "column"],
+    "provider_method": "repeatCell"
+  },
+  {
+    "name": "FreezeTopRow",
+    "description": "Freeze the first row so it stays visible.",
+    "inputs": ["tab", "rows_to_freeze"],
+    "provider_method": "updateSheetProperties"
+  },
+  {
+    "name": "HighlightNegatives",
+    "description": "Apply conditional formatting so negative numbers show in red.",
+    "inputs": ["tab", "column"],
+    "provider_method": "addConditionalFormatRule"
+  },
+  {
+    "name": "InsertColumns",
+    "description": "Insert new columns after a chosen position.",
+    "inputs": ["tab", "after_column", "count"],
+    "provider_method": "insertDimension"
+  },
+  {
+    "name": "AddTotalRow",
+    "description": "Insert a totals row at the bottom, summing or averaging a column.",
+    "inputs": ["tab", "column", "operation"],
+    "provider_method": "appendCells"
+  },
+  {
+    "name": "SortByColumn",
+    "description": "Sort the sheet by one column ascending or descending.",
+    "inputs": ["tab", "column", "order"],
+    "provider_method": "sortRange"
+  },
+  {
+    "name": "CreatePivot",
+    "description": "Build a pivot table from the data to summarize values.",
+    "inputs": ["source_tab", "row_field", "value_field", "agg_function"],
+    "provider_method": "updateCells"
+  },
+  {
+    "name": "CreateBarChart",
+    "description": "Add a bar chart from a given range or pivot.",
+    "inputs": ["tab", "source_range"],
+    "provider_method": "addChart"
+  },
+  {
+    "name": "AddTrendline",
+    "description": "Add a line chart to show trends over time.",
+    "inputs": ["tab", "date_column", "value_column"],
+    "provider_method": "addChart"
+  },
+  {
+    "name": "ProtectHeaders",
+    "description": "Lock the header row so it cannot be edited.",
+    "inputs": ["tab", "row_number"],
+    "provider_method": "addProtectedRange"
+  },
+  {
+    "name": "UndoLastChange",
+    "description": "Revert the last action applied to the sheet.",
+    "inputs": [],
+    "provider_method": "executor_internal"
+  },
+  {
+    "name": "UnboldHeader",
+    "description": "Remove bold formatting from the header row.",
+    "inputs": ["tab", "row_number"],
+    "provider_method": "repeatCell"
+  }
+]

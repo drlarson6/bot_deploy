@@ -1,0 +1,37 @@
+# Ignore virtual environments
+venv/
+.venv/
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore system / IDE junk
+.DS_Store
+*.swp
+*.swo
+*.idea/
+.vscode/
+
+# Ignore large generated files
+*.mp3
+*.wav
+*.ogg
+*.log
+*.json
+
+# Ignore build/test artifacts
+dist/
+build/
+*.egg-info/
+
+# Ignore local experiments/backups
+llama.cpp/
+backups/
+datasets/
+notebooks/
+tests/
+
+!token.json

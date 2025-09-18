@@ -1,0 +1,101 @@
+.user-message, .bot-message {
+    padding: 5px 10px;
+    border-radius: 4px;
+    margin-bottom: 2px;
+    display: block;
+    max-width: 80%;
+}
+
+.user-message {
+    background-color: #212121;
+    color: white;
+    text-align: left;
+}
+
+.bot-message {
+    background-color: #212121;
+    text-align: left;
+}
+
+#chatOutput {
+    margin-top: 20px;
+    flex-grow: 1;
+    overflow-y: auto;
+    padding-bottom: 70px;
+    background-color: #212121;
+}
+
+body, html {
+    height: 100%;
+    margin: 0;
+    font-family: 'Arial', sans-serif;
+    color: white;
+    background-color: #212121;
+    display: flex;
+    flex-direction: column;
+}
+
+#chatForm {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 10px;
+    color: white;
+    background-color: #212121;
+    border-top: 1px solid #ccc;
+}
+
+#chatForm .icon-button {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+}
+
+#chatForm .icon-button img {
+    filter: invert(100%);
+    height: 24px;
+    width: 24px;
+}
+
+#chatForm input[type="text"] {
+    width: calc(100% - 165px);
+    height: 50px;
+    padding: 0 10px;
+    font-size: 16px;
+    border: 1px solid #ccc;
+    border-radius: 12px;
+    flex-grow: 1;
+    margin-right: 5px;
+    color: white;
+    background-color: #212121;
+}
+
+#chatForm input[type="submit"] {
+    padding: 10px 20px;
+    width: 80px;
+    height: 50px;
+    font-size: 16px;
+    border-radius: 12px;
+    margin-left: 5px;
+    margin-right: 5px;
+    color: white;
+    background-color: #212121;
+    cursor: pointer;
+}
+
+#chatForm input[type="submit"]:hover {
+    background-color: #333;
+    border-color: #fff;
+}
+
+#chatForm input[type="submit"]:active {
+    background-color: #555;
+    border-color: #aaa;
+}
+
+#chatForm button, #chatForm input[type="submit"], #chatForm input[type="text"] {
+    align-self: center;
+}

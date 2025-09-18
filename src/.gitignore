@@ -1,0 +1,32 @@
+venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+sessions/
+*.log
+
+.env
+*.env
+intent-agent-*.json
+*serviceaccount*.json
+google-credentials*.json
+
+# local repos
+Llama-3.1-8B-Instruct/
+llama.cpp/
+
+# secrets & generated
+*.mp3
+*.wav
+output.*
+sheet_logs/
+specs/*.cache
+*.pyc
+__pycache__/
+token.json
+chat_history.json
+
+# local repos
+Llama-3.1-8B-Instruct/
+llama.cpp/

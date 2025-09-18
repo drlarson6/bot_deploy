@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chatbot Prototype</title>
+    <style>
+        .user-message, .bot-message {
+            padding: 5px 10px;
+            border-radius: 4px;
+            margin-bottom: 2px;
+            display: block;
+            max-width: 80%;
+        }
+
+        .user-message {
+            background-color: #212121;
+            color: white;
+            text-align: left;
+        }
+
+        .bot-message {
+            background-color: #212121;
+            text-align: left;
+        }
+
+        #chatOutput {
+            margin-top: 20px;
+            flex-grow: 1;
+            overflow-y: auto;
+            padding-bottom: 70px;
+            background-color: #212121;
+        }
+
+        body, html {
+            height: 100%;
+            margin: 0;
+            font-family: 'Arial', sans-serif;
+            color: white;
+            background-color: #212121;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #chatForm {
+            display: flex;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 10px;
+            color: white;
+            background-color: #212121;
+            border-top: 1px solid #ccc;
+        }
+        
+        #chatForm .icon-button {
+            background: none;
+            border: none;
+            padding: 0;
+            cursor: pointer;
+        }
+        
+        #chatForm .icon-button img {
+            filter: invert(100%);
+            height: 24px;
+            width: 24px;
+        }
+
+        #chatForm input[type="text"] {
+            width: calc(100% - 165px);
+            height: 50px;
+            padding: 0 10px;
+            font-size: 16px;
+            border: 1px solid #ccc;
+            border-radius: 12px;
+            flex-grow: 1;
+            margin-right: 5px;
+            color: white;
+            background-color: #212121;
+        }
+
+        #chatForm input[type="submit"] {
+            padding: 10px 20px;
+            width: 80px;
+            height: 50px;
+            font-size: 16px;
+            border-radius: 12px;
+            margin-left: 5px;
+            margin-right: 5px;
+            color: white;
+            background-color: #212121;
+            cursor: pointer;
+        }
+        
+        #chatForm input[type="submit"]:hover {
+            background-color: #333;
+            border-color: #fff;
+        }
+        
+        #chatForm input[type="submit"]:active {
+            background-color: #555;
+            border-color: #aaa;
+        }
+        
+        #chatForm button, #chatForm input[type="submit"], #chatForm input[type="text"] {
+            align-self: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="chatOutput"></div>
+
+    <form id="chatForm" action="/handle-form" method="post">
+        <input type="text" id="userInput" name="user_input" autocomplete="off" placeholder="Type a message...">
+        <input type="submit" value="Send">
+        <button type="button" id="sttButton" class="icon-button">
+            <img id="micIcon" src="{{ url_for('static', filename='images/microphone-off.svg') }}" alt="Microphone">
+        </button>
+        
+    </form>
+
+    
+    
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+
+    <script>window.AUTO_TTS = false;</script>   //Temporary disable auto TTS
+<script>
+    let stream, audioContext, source, processor, audioChunks, continueConversation;
+
+    
+    let micState = "idle"; // "idle", "recording", "speaking"
+
+    let safariAudioUnlocked = false;
+
+async function handleMicrophoneClick() {
+    // ✅ If already recording, stop immediately and process audio
+    if (micState === "recording") {
+        processor.disconnect();
+        source.disconnect();
+
+        const audioBlob = exportWAV(audioChunks, audioContext.sampleRate);
+        const formData = new FormData();
+        formData.append('audio', audioBlob, 'audio.wav');
+
+        handleAudioPost(formData, continueConversation, document.getElementById('micIcon'));
+        micState = "idle";
+        return;
+    }
+
+    // ✅ Safari unlock (unchanged)
+    if (!safariAudioUnlocked) {
+        const dummy = new Audio();
+        dummy.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEA...";
+        dummy.play().catch(()=>{});
+        safariAudioUnlocked = true;
+    }
+
+    // ✅ Toggle mic icon (for starting new recording)
+    let micIcon = document.getElementById('micIcon');
+    micIcon.src = 'static/images/microphone-on.svg';
+    micIcon.alt = 'Microphone on';
+
+    // ✅ Start new recording
+    micState = "recording";
+    continueConversation = true;
+    audioChunks = [];
+
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new AudioContext();
+        source = audioContext.createMediaStreamSource(stream);
+        processor = audioContext.createScriptProcessor(1024, 1, 1);
+
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+
+        processor.onaudioprocess = (e) => {
+            audioChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+        };
+
+    } catch (error) {
+        console.error('Error accessing microphone:', error);
+        micState = "idle";
+    }
+}
+
+    function finishRecording() {
+        processor.disconnect();
+        source.disconnect();
+
+        const audioBlob = exportWAV(audioChunks, audioContext.sampleRate);
+        const formData = new FormData();
+        formData.append('audio', audioBlob, 'audio.wav');
+
+        handleAudioPost(formData, continueConversation, micIcon);
+        micState = "idle";
+    }
+
+    async function handleAudioPost(formData, continueConversation, micIcon) {
+        while (continueConversation) {
+            const response = await fetch('/record_and_transcribe', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+            if (data.message[0].transcript.trim().length > 0) {
+                updateTranscript(data.message[0].transcript);
+            }
+            if (data.message[0].response_text.trim().length > 0) {
+                updateResponse(data.message[0].response_text);
+            }
+            chatOutput.scrollTop = chatOutput.scrollHeight;
+
+            continueConversation = data.message[0].follow_up_needed;
+        }
+
+        micIcon.src = 'static/images/microphone-off.svg';
+        micIcon.alt = 'Microphone off';
+    }
+
+    function exportWAV(audioChunks, sampleRate) {
+        const buffer = mergeBuffers(audioChunks);
+        const wavBuffer = encodeWAV(buffer, sampleRate);
+        return new Blob([wavBuffer], { type: 'audio/wav' });
+    }
+
+    function mergeBuffers(audioChunks) {
+        const length = audioChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+        const result = new Float32Array(length);
+        let offset = 0;
+        audioChunks.forEach(chunk => {
+            result.set(chunk, offset);
+            offset += chunk.length;
+        });
+        return result;
+    }
+
+    function encodeWAV(buffer, sampleRate) {
+        const bufferLength = buffer.length * 2 + 44;
+        const wav = new DataView(new ArrayBuffer(bufferLength));
+
+        writeString(wav, 0, 'RIFF');
+        wav.setUint32(4, 36 + buffer.length * 2, true);
+        writeString(wav, 8, 'WAVE');
+
+        writeString(wav, 12, 'fmt ');
+        wav.setUint32(16, 16, true);
+        wav.setUint16(20, 1, true);
+        wav.setUint16(22, 1, true);
+        wav.setUint32(24, sampleRate, true);
+        wav.setUint32(28, sampleRate * 2, true);
+        wav.setUint16(32, 2, true);
+        wav.setUint16(34, 16, true);
+
+        writeString(wav, 36, 'data');
+        wav.setUint32(40, buffer.length * 2, true);
+
+        let offset = 44;
+        for (let i = 0; i < buffer.length; i++, offset += 2) {
+            const sample = Math.max(-1, Math.min(1, buffer[i]));
+            wav.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+        }
+
+        return wav;
+    }
+
+    function writeString(dataview, offset, string) {
+        for (let i = 0; i < string.length; i++) {
+            dataview.setUint8(offset + i, string.charCodeAt(i));
+        }
+    }
+
+    function updateTranscript(transcript) {
+        const userMessageDiv = document.createElement('div');
+        userMessageDiv.textContent = 'Me: ' + transcript;
+        userMessageDiv.classList.add('user-message');
+        document.getElementById('chatOutput').appendChild(userMessageDiv);
+    }
+
+    function updateResponse(response) {
+        if (response && response.trim() && !response.includes("Intent")) {
+            const botMessageDiv = document.createElement('div');
+            botMessageDiv.textContent = 'Agent: ' + response;
+            botMessageDiv.classList.add('bot-message');
+            document.getElementById('chatOutput').appendChild(botMessageDiv);
+
+            //Turn off auto TTS for now
+            //speakWithGoogleTTS(response); // ✅ central TTS logic
+        }
+    }
+
+    function speakWithGoogleTTS(text) {
+
+        if (!window.AUTO_TTS) return;   // text-only mode (temporary disable)
+
+        fetch('/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text })
+        })
+        .then(res => {
+            if (!res.ok) throw new Error("TTS failed");
+            return res.blob();
+        })
+        .then(blob => {
+            const audioUrl = URL.createObjectURL(blob);
+            const audio = new Audio(audioUrl);
+            window.speakingAudio = audio;
+            micState = "speaking";   // 🔹 add here
+            audio.onended = () => { micState = "idle"; };
+
+            return audio.play().then(() => {
+                console.log("✅ Audio played");
+            }).catch(err => {
+                console.warn("⚠️ Autoplay blocked. Waiting for click...");
+                const retry = () => {
+                    audio.play().then(() => {
+                        console.log("✅ Played after click");
+                        document.removeEventListener("click", retry);
+                    }).catch(err => {
+                        console.error("❌ Still blocked:", err);
+                    });
+                };
+                document.addEventListener("click", retry);
+            });
+        })
+        .catch(err => console.error("Fetch or playback error:", err));
+    }
+
+    function sendToGPT(prompt) {
+        fetch('/ask-gpt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt })
+        })
+        .then(response => response.json())
+        .then(data => {
+            console.log("GPT-4o reply:", data.reply);
+        })
+        .catch(err => {
+            console.error("Error calling GPT:", err);
+        });
+    }
+
+    document.addEventListener("DOMContentLoaded", function() {
+        var socket = io();
+
+        var form = document.getElementById('chatForm');
+        var chatOutput = document.getElementById('chatOutput');
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var userInputValue = document.getElementById('userInput').value;
+
+            console.log("Submitted input:", userInputValue);
+
+            if (!userInputValue.trim()) return;
+
+            fetch('/handle-form', {
+                method: 'POST',
+                body: new FormData(e.target)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok ' + response.statusText);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Received data from form submission:', data);
+                var userMessageDiv = document.createElement('div');
+                userMessageDiv.textContent = 'Me: ' + userInputValue;
+                userMessageDiv.classList.add('user-message');
+                chatOutput.appendChild(userMessageDiv);
+
+                if (data.response && data.response.trim()) {
+                    var botMessageDiv = document.createElement('div');
+                    botMessageDiv.textContent = 'Agent: ' + data.response;
+                    botMessageDiv.classList.add('bot-message');
+                    chatOutput.appendChild(botMessageDiv);
+
+                    //Comment out TTS for now
+                    //speakWithGoogleTTS(data.response); // ✅ consistent use
+                }
+
+                chatOutput.scrollTop = chatOutput.scrollHeight;
+                document.getElementById('userInput').value = '';
+                document.getElementById('userInput').style.display = 'block';
+                document.getElementById('sttButton').style.display = 'block';
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('responseField').innerText = "An error occurred.";
+            });
+        });
+
+        document.getElementById('sttButton').addEventListener('click', handleMicrophoneClick);
+    });
+</script>
+    
+</body>
+</html>
