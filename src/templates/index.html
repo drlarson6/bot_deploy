@@ -178,7 +178,8 @@
 
     <div id="chatOutput"></div>
 
-    <form id="chatForm" action="" method="post">
+    <form id="chatForm" action="/handle-form" method="post">
+        <input type="hidden" name="sid" id="sidField">
         <input type="text" id="userInput" name="user_input" autocomplete="off" placeholder="Type a message...">
         <input type="submit" value="Send">
         <button type="button" id="sttButton" class="icon-button">
@@ -436,61 +437,57 @@ async function handleMicrophoneClick() {
         });
     }
 
-    document.addEventListener("DOMContentLoaded", function() {
-        var socket = io();
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
 
-        var form = document.getElementById('chatForm');
-        var chatOutput = document.getElementById('chatOutput');
+        // 🔑 ensure hidden sid field is populated for backend
+        document.getElementById('sidField').value = localStorage.getItem('sid') || '';
 
-        form.addEventListener('submit', function(e) {
-            e.preventDefault();
-            var userInputValue = document.getElementById('userInput').value;
+        var userInputValue = document.getElementById('userInput').value;
+        console.log("Submitted input:", userInputValue);
 
-            console.log("Submitted input:", userInputValue);
+        if (!userInputValue.trim()) return;
 
-            if (!userInputValue.trim()) return;
+        apiFetch('/ask-gpt', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ prompt: userInputValue })
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Network response was not ok ' + response.statusText);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Received data from form submission:', data);
+            var userMessageDiv = document.createElement('div');
+            userMessageDiv.textContent = 'Me: ' + userInputValue;
+            userMessageDiv.classList.add('user-message');
+            chatOutput.appendChild(userMessageDiv);
 
-            apiFetch('/ask-gpt', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ prompt: userInputValue })
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok ' + response.statusText);
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log('Received data from form submission:', data);
-                var userMessageDiv = document.createElement('div');
-                userMessageDiv.textContent = 'Me: ' + userInputValue;
-                userMessageDiv.classList.add('user-message');
-                chatOutput.appendChild(userMessageDiv);
+            if (data.reply && data.reply.trim()) {
+                var botMessageDiv = document.createElement('div');
+                botMessageDiv.textContent = 'Agent: ' + data.reply;
+                botMessageDiv.classList.add('bot-message');
+                chatOutput.appendChild(botMessageDiv);
+            }
 
-                if (data.reply && data.reply.trim()) {
-                    var botMessageDiv = document.createElement('div');
-                    botMessageDiv.textContent = 'Agent: ' + data.reply;
-                    botMessageDiv.classList.add('bot-message');
-                    chatOutput.appendChild(botMessageDiv);
-                }
-
-                chatOutput.scrollTop = chatOutput.scrollHeight;
-                document.getElementById('userInput').value = '';
-                document.getElementById('userInput').style.display = 'block';
-                document.getElementById('sttButton').style.display = 'block';
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                document.getElementById('responseField').innerText = "An error occurred.";
-            });
+            chatOutput.scrollTop = chatOutput.scrollHeight;
+            document.getElementById('userInput').value = '';
+            document.getElementById('userInput').style.display = 'block';
+            document.getElementById('sttButton').style.display = 'block';
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            document.getElementById('responseField').innerText = "An error occurred.";
         });
+}); // closes form.addEventListener
 
-        document.getElementById('sttButton').addEventListener('click', handleMicrophoneClick);
-    });
+document.getElementById('sttButton').addEventListener('click', handleMicrophoneClick);
+
 </script>
-    
 </body>
 </html>
