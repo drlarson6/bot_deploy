@@ -6,8 +6,9 @@ import traceback
 from session_state import session, SessionType
 from flask import current_app, send_from_directory
 
-from tts_bytes import synthesize_to_bytes  # import the helper above
+from storage import append_log, iter_session_events
 
+from tts_bytes import synthesize_to_bytes  # import the helper above
 from router import handle_session_text_router, Ctx
 USE_NEW_ROUTER = True  # toggle the new router on/off for testing
 
@@ -21,7 +22,7 @@ import dataclasses
 from http import client
 import logging
 from wsgiref import headers
-from flask import Flask, request, jsonify, render_template, send_file, Response
+from flask import Flask, request, jsonify, render_template, send_file, Response, abort
 
 from search_and_email import (
     read_sheet_and_send_email, spreadsheet_id, range_name,
@@ -87,6 +88,13 @@ last_reply  = None
 translate_client = translate.TranslationServiceClient()
 
 app = Flask(__name__)
+
+@app.errorhandler(400)
+@app.errorhandler(500)
+def _json_errors(e):
+    code = getattr(e, "code", 500)
+    desc = getattr(e, "description", str(e))
+    return jsonify({"error": desc, "code": code}), code
 
 
 @app.route("/robots.txt")
@@ -332,6 +340,17 @@ def df_webhook():
             }
         }]
     })
+
+
+@app.route("/debug")
+def debug():
+    try:
+        sid = str(uuid.uuid4())
+        os.makedirs(SESS_DIR, exist_ok=True)
+        open(session_path(sid), "a", encoding="utf-8").close()
+        return {"sid": sid}
+    except Exception:
+        return {"error": traceback.format_exc()}, 500
 
 @app.route("/debug-state", methods=["GET"])
 def debug_state():
@@ -820,41 +839,118 @@ def decision_tree(intent_name, dialogflow_response):
         return jsonify({
             "fulfillmentText": response_message
         })
+    
+@app.route('/ask-gpt-echo', methods=['POST'])
+def ask_gpt_echo():
+    try:
+        sid = get_sid_or_400()
+        data = request.get_json(silent=True) or {}
+        prompt = (data.get('prompt') or data.get('text') or '').strip()
+        append_log(sid, "q", prompt)                 # writes to /tmp/sessions/<sid>.jsonl
+        reply = f"echo: {prompt}"                    # no GPT/DF/logging side effects
+        append_log(sid, "a", reply)
+        return jsonify({"reply": reply}), 200
+    except Exception as e:
+        import traceback
+        return (traceback.format_exc(), 500, {"Content-Type":"text/plain"})
+
 @app.route('/ask-gpt', methods=['POST'])
 def ask_gpt():
     global last_prompt, last_reply
 
-    data = request.get_json()
+    sid = get_sid_or_400()
+    data = request.get_json(silent=True) or {}
     prompt = (data.get('prompt') or data.get('text') or '').strip()
 
-    handled, reply = handle_session_text(prompt)
-    if handled:
-        return jsonify({'reply': reply}), 200
-
-    if not prompt:
-        return jsonify({'reply': '(No input received)'}), 200
-
     try:
-        if session.mode:
-            # Deviation session → GPT-4o only
-            if prompt == last_prompt:
-                return jsonify({'reply': last_reply})
+        append_log(sid, "q", prompt)
 
-            reply, _ = chat_with_gpt(prompt)
+        handled, reply = handle_session_text(prompt)
+        if handled:
+            append_log(sid, "a", reply)
+            return jsonify({"reply": reply}), 200
+
+        if not prompt:
+            append_log(sid, "a", "(No input received)")
+            return jsonify({"reply": "(No input received)"}), 200
+
+        # Branch selector (query param wins)
+        # Branch selector (query param wins) — GPT is the default
+        mode = (request.args.get('mode') or "gpt").lower()
+
+        if mode == "gpt":
+            # same-prompt short circuit
+            if prompt == last_prompt and last_reply:
+                append_log(sid, "a", last_reply)
+                return jsonify({"reply": last_reply}), 200
+
+            # ---- session memory (inline transcript) ------------------------
+            transcript_lines = []
+            try:
+                p = session_path(sid)
+                if os.path.exists(p):
+                    with open(p, "r", encoding="utf-8") as f:
+                        events = [json.loads(line) for line in f if line.strip()]
+                        events = events[-20:]  # last ~10 pairs
+                        for ev in events:
+                            t, d = ev.get("type"), str(ev.get("data", ""))
+                            if not d:
+                                continue
+                            if t == "q":
+                                transcript_lines.append(f"User: {d}")
+                            elif t == "a":
+                                transcript_lines.append(f"Assistant: {d}")
+            except Exception:
+                transcript_lines = []
+
+            if transcript_lines:
+                combined_prompt = (
+                    "You are a helpful, concise assistant.\n\n"
+                    "Recent conversation (most recent last):\n"
+                    + "\n".join(transcript_lines)
+                    + f"\n\nUser: {prompt}\nAssistant:"
+                )
+            else:
+                combined_prompt = prompt
+            # ----------------------------------------------------------------
+
+            reply, _ = chat_with_gpt(combined_prompt)
             last_prompt = prompt
             last_reply = reply
-            log_chat_to_history(prompt, reply)
-            return jsonify({'reply': reply}), 200
+            try:
+                log_chat_to_history(prompt, reply)
+            except Exception as e:
+                append_log(sid, "warn", f"log_chat_to_history failed: {e}")
 
-        else:
-            # Pre-session → Dialogflow
-            df_reply = send_to_dialogflow_text(prompt)  # wrapper returns plain string
-            return jsonify({'reply': df_reply}), 200
+            append_log(sid, "a", reply)
+            return jsonify({"reply": reply}), 200
 
+        # Dialogflow path
+        df_reply = send_to_dialogflow_text(prompt) or "(No reply)"
+        append_log(sid, "a", df_reply)
+        return jsonify({"reply": df_reply}), 200
+
+    except Exception:
+        tb = traceback.format_exc()
+        try:
+            append_log(sid, "err", tb)   # don't let logging kill the response
+        except Exception:
+            pass
+        return jsonify({"error": "ask_gpt failed", "detail": tb}), 500
+    
+@app.get("/_gcs_check")
+def _gcs_check():
+    try:
+        import os
+        from google.cloud import storage
+        b = os.environ.get("GCS_BUCKET")
+        if not b:
+            return {"ok": False, "why": "GCS_BUCKET not set"}, 500
+        storage.Client().bucket(b).blob("healthchecks/ok.txt").upload_from_string("ok")
+        return {"ok": True, "bucket": b}
     except Exception as e:
-        print("⚠️ Error in ask_gpt():", e)
-        return jsonify({'reply': '(An error occurred.)'}), 500
-
+        return {"ok": False, "why": str(e)}, 500    
+    
 @app.route('/')
 def home():
     return render_template('index.html')  # 'index.html' file should be in your 'templates' folder.
@@ -1377,7 +1473,95 @@ def open_safari_when_ready():
         time.sleep(0.5)
     print("[opener] timed out; not opening browser")
 
+@app.route("/debug/headers", methods=["POST"])
+def debug_headers():
+    return jsonify(dict(request.headers)), 200    
+
+@app.post("/session/new")
+def session_new():
+    sid = str(uuid4())
+    open(session_path(sid), "a").close()   # create empty file
+    return jsonify({"sid": sid})
+
+@app.post("/session/forget")
+def session_forget():
+    sid = get_sid_or_400()
+    try: os.remove(session_path(sid))
+    except FileNotFoundError: pass
+    return ("", 204)    
+
 # ---- Helpers ----
+
+SESS_DIR = os.environ.get("SESS_DIR", "/tmp/sessions")
+os.makedirs(SESS_DIR, exist_ok=True)
+
+def now_iso():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+def valid_sid(sid: str) -> bool:
+    try: uuid.UUID(sid); return True
+    except: return False
+
+def session_path(sid): 
+    return os.path.join(SESS_DIR, f"{sid}.jsonl")
+
+# --- TEMP: ultra-permissive SID getter with debug print ---
+
+def iter_session_events(sid):
+    p = session_path(sid)
+    if not os.path.exists(p): 
+        return
+    with open(p, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line: 
+                continue
+            try:
+                yield json.loads(line)
+            except Exception:
+                continue
+
+def load_history_as_messages(sid, limit_pairs=10):
+    """
+    Return messages like [{"role":"user","content":"..."}, {"role":"assistant","content":"..."}]
+    using the last `limit_pairs` Q/A from this session's JSONL.
+    """
+    msgs = []
+    for ev in iter_session_events(sid):
+        if ev.get("type") == "q":
+            msgs.append({"role": "user", "content": str(ev.get("data",""))})
+        elif ev.get("type") == "a":
+            msgs.append({"role": "assistant", "content": str(ev.get("data",""))})
+    # keep only the last N pairs (≈ 2N messages)
+    if limit_pairs:
+        msgs = msgs[-2*limit_pairs:]
+    return msgs
+
+
+def get_sid_or_400():
+    # try header (any casing), then ?sid=, then JSON body { sid: "" }
+    sid = (
+        request.headers.get('X-Session-ID')
+        or request.headers.get('X-Session-Id')
+        or request.headers.get('x-session-id')
+        or request.args.get('sid')
+        or ((request.get_json(silent=True) or {}).get('sid'))
+        or ''
+    )
+    sid = str(sid).strip().strip('"').strip("'")
+    print("DEBUG get_sid_or_400() saw SID:", sid)  # will show in logs
+    if not sid:
+        abort(400, 'Missing or invalid X-Session-ID')
+    return sid
+# --- END TEMP ---
+
+#def append_log(sid, event_type, data):
+#    rec = {"t": now_iso(), "type": event_type, "data": data}
+#    with open(session_path(sid), "a", encoding="utf-8") as f:
+#       f.write(json.dumps(rec) + "\n")
+
+
 
 #SHEETS_ACTION_URL = "http://127.0.0.1:5055/sheet-action"  # <-- point to your existing boldHeader endpoint if different
 
