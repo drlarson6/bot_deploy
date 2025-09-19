@@ -966,12 +966,24 @@ def log_microphone_state():
 
 @app.route('/handle-form', methods=['POST'])
 def handle_form():
-    #global session.mode  # local fallback if control hook hiccups
-    user_input = request.form.get('user_input', '').strip()
+    user_input = (request.form.get('user_input') or '').strip()
+    sid = get_sid_or_400()  # now sees the hidden form field
+
+    # Log the user turn for persistence
+    if user_input:
+        try:
+            append_log(sid, "q", user_input)
+        except Exception:
+            pass
 
     # 0) Intercept if we’re in GPT-only session (or ending it)
     handled, reply = handle_session_text(user_input)
     if handled:
+        # Log the assistant turn
+        try:
+            append_log(sid, "a", reply)
+        except Exception:
+            pass
         return jsonify({'response': reply}), 200
 
     if not user_input:
@@ -1005,19 +1017,46 @@ def handle_form():
 
         # Not our deviation flow → return DF text if present
         if text:
+            try:
+                append_log(sid, "a", text)
+            except Exception:
+                pass
             return jsonify({'response': text}), 200
 
     except Exception as e:
         app.logger.warning(f'DF error: {e} (falling back to GPT)')
 
-    # 2) Fallback: GPT
-    reply, _ = chat_with_gpt(user_input)
+    # 2) Fallback: GPT with short memory context
+    # Build brief transcript from prior events for this SID
+    history_lines = []
+    try:
+        for ev in iter_session_events(sid):
+            t = ev.get("type"); d = str(ev.get("data", ""))
+            if not d:
+                continue
+            if t == "q":
+                history_lines.append(f"User: {d}")
+            elif t == "a":
+                history_lines.append(f"Assistant: {d}")
+        history_lines = history_lines[-20:]  # last ~10 pairs
+    except Exception:
+        history_lines = []
+
+    combined_prompt = (
+        "You are a helpful, concise assistant.\n\n"
+        "Recent conversation (most recent last):\n" + "\n".join(history_lines) +
+        f"\n\nUser: {user_input}\nAssistant:"
+    ) if history_lines else user_input
+
+    reply, _ = chat_with_gpt(combined_prompt)
+
+    # Log assistant turn
+    try:
+        append_log(sid, "a", reply)
+    except Exception:
+        pass
+
     return jsonify({'response': reply}), 200
-
-
-#from uuid4 import uuid4            # (leave as-is if already present)
-#from datetime import datetime     # (leave as-is if already present)
-
 
 @app.route('/control-hook', methods=['POST'])
 def control_hook():
@@ -1546,6 +1585,7 @@ def get_sid_or_400():
         or request.headers.get('X-Session-Id')
         or request.headers.get('x-session-id')
         or request.args.get('sid')
+        or request.form.get('sid')
         or ((request.get_json(silent=True) or {}).get('sid'))
         or ''
     )
