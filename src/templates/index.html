@@ -112,21 +112,37 @@
     <button id="copyLinkBtn">Copy Resume Link</button>
 
     <script>
-    (async () => {
-    await window.sidReady;
-    const sid = localStorage.getItem('sid');
-    const resumeUrl = `${location.origin}/?sid=${sid}`;
+        localStorage.sid ||= (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
 
-    document.getElementById('copyLinkBtn').onclick = async () => {
-        try {
-        await navigator.clipboard.writeText(resumeUrl);
-        alert("Resume link copied! Share or save this URL.");
-        } catch (e) {
-        console.error("Clipboard copy failed:", e);
-        prompt("Copy this link manually:", resumeUrl);
+        console.log('LIVE BUILD ✳︎', new Date().toISOString());
+        // Back-compat shim so any lingering `form...` lines stop throwing:
+        const chatForm = document.getElementById('chatForm') || document.querySelector('form') || null;
+        const form = chatForm; // keep old code from crashing
+
+        if (!localStorage.getItem('sid')) {
+            localStorage.setItem('sid', crypto.randomUUID());
         }
-    };
-    })();
+        
+        // Ensure a browser SID exists
+        if (!localStorage.getItem('sid')) {
+        localStorage.setItem('sid', crypto.randomUUID());
+        }
+
+        (async () => {
+        await window.sidReady;
+        const sid = localStorage.getItem('sid');
+        const resumeUrl = `${location.origin}/?sid=${sid}`;
+
+        document.getElementById('copyLinkBtn').onclick = async () => {
+            try {
+            await navigator.clipboard.writeText(resumeUrl);
+            alert("Resume link copied! Share or save this URL.");
+            } catch (e) {
+            console.error("Clipboard copy failed:", e);
+            prompt("Copy this link manually:", resumeUrl);
+            }
+        };
+        })();
     </script>
 
     <script>
@@ -178,10 +194,10 @@
 
     <div id="chatOutput"></div>
 
-    <form id="chatForm" action="/handle-form" method="post">
+    <form id="chatForm" action="#" method="post">
         <input type="hidden" name="sid" id="sidField">
         <input type="text" id="userInput" name="user_input" autocomplete="off" placeholder="Type a message...">
-        <input type="submit" value="Send">
+        <input type="button" id="sendBtn" value="Send">
         <button type="button" id="sttButton" class="icon-button">
             <img id="micIcon" src="{{ url_for('static', filename='images/microphone-off.svg') }}" alt="Microphone">
         </button>
@@ -198,13 +214,22 @@
         localStorage.setItem('sid', sid);
     }
 
+    // ensure a SID exists (no new const)
+    if (!localStorage.sid) {
+        localStorage.sid = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    }
+
+
     // 🔁 NEW apiFetch: send header AND add ?sid=... to the URL
     window.apiFetch = (url, opts = {}) => {
+        if (!url) throw new Error('apiFetch: missing url');
+        const sid = localStorage.sid;                     // read it here
         const u = new URL(url, location.origin);
-        u.searchParams.set('sid', sid);                     // <— query fallback
+        u.searchParams.set('sid', sid);                   // fallback query
         opts.headers = Object.assign({}, opts.headers, { 'X-Session-ID': sid });
         return fetch(u, opts);
     };
+
 
     return sid;
     })();
@@ -423,7 +448,10 @@ async function handleMicrophoneClick() {
 
         return apiFetch('/ask-gpt', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-Session-ID': localStorage.sid
+            },
             body: JSON.stringify({ prompt })
         })
         .then(r => r.json())
@@ -437,57 +465,107 @@ async function handleMicrophoneClick() {
         });
     }
 
-    form.addEventListener('submit', function(e) {
-        e.preventDefault();
+    // Ensure the hidden SID is populated on page load
+    (function ensureSidField() {
+        const sid = localStorage.getItem('sid') || '';
+        const sidInput = document.getElementById('sidField');
+        if (sidInput && sid) sidInput.value = sid;
+    })();
 
-        // 🔑 ensure hidden sid field is populated for backend
-        document.getElementById('sidField').value = localStorage.getItem('sid') || '';
+    
 
-        var userInputValue = document.getElementById('userInput').value;
-        console.log("Submitted input:", userInputValue);
+// === SID + form setup (use existing chatForm) ===
 
-        if (!userInputValue.trim()) return;
+// Ensure a browser SID exists (once)
+if (!localStorage.getItem('sid')) {
+  localStorage.setItem('sid', crypto.randomUUID());
+}
 
-        apiFetch('/ask-gpt', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ prompt: userInputValue })
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok ' + response.statusText);
-            }
-            return response.json();
-        })
-        .then(data => {
-            console.log('Received data from form submission:', data);
-            var userMessageDiv = document.createElement('div');
-            userMessageDiv.textContent = 'Me: ' + userInputValue;
-            userMessageDiv.classList.add('user-message');
-            chatOutput.appendChild(userMessageDiv);
+// Prevent native navigation; we always handle submit via JS
+if (chatForm) {
+  chatForm.setAttribute('action', '#');
+  // capture:true ensures we stop any native submit early
+  chatForm.addEventListener('submit', e => e.preventDefault(), { capture: true });
+}
 
-            if (data.reply && data.reply.trim()) {
-                var botMessageDiv = document.createElement('div');
-                botMessageDiv.textContent = 'Agent: ' + data.reply;
-                botMessageDiv.classList.add('bot-message');
-                chatOutput.appendChild(botMessageDiv);
-            }
+// Wire the Send button to trigger the same submit handler
+document.getElementById('sendBtn')?.addEventListener('click', () => {
+  chatForm?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+});
 
-            chatOutput.scrollTop = chatOutput.scrollHeight;
-            document.getElementById('userInput').value = '';
-            document.getElementById('userInput').style.display = 'block';
-            document.getElementById('sttButton').style.display = 'block';
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            document.getElementById('responseField').innerText = "An error occurred.";
-        });
-}); // closes form.addEventListener
+// Drop-in replacement for your current submit handler
+chatForm.addEventListener('submit', async function (e) {
+  e.preventDefault();
 
+  // 1) Ensure a SID exists
+  let sid = localStorage.getItem('sid');
+  if (!sid) {
+    sid = (crypto.randomUUID
+      ? crypto.randomUUID()
+      : String(Date.now()) + Math.random().toString(16).slice(2)
+    );
+    localStorage.setItem('sid', sid);
+  }
+
+  // 2) Keep hidden field in sync (backend fallbacks)
+  const sidField = document.getElementById('sidField');
+  if (sidField && sidField.value !== sid) sidField.value = sid;
+
+  // 3) Read input
+  const userInputEl = document.getElementById('userInput');
+  const userInputValue = (userInputEl?.value || '').trim();
+  if (!userInputValue) return;
+
+  console.log('Submitted input:', userInputValue);
+
+  // 4) Show user bubble immediately
+  const userMessageDiv = document.createElement('div');
+  userMessageDiv.textContent = 'Me: ' + userInputValue;
+  userMessageDiv.classList.add('user-message');
+  chatOutput.appendChild(userMessageDiv);
+
+  // 5) Call backend: /handle-form with FormData + X-Session-ID header
+  //    (no JSON Content-Type; let the browser set multipart boundary)
+  try {
+    const formData = new FormData(chatForm); // includes user_input + sidField
+    const r = await apiFetch('/handle-form', {
+      method: 'POST',
+      headers: {
+        'X-Session-ID': sid
+      },
+      body: formData
+    });
+
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+
+    const data = await r.json();
+    const replyText = (data && (data.response || data.reply)) || '(No reply)';
+
+    if (replyText.trim()) {
+      const botMessageDiv = document.createElement('div');
+      botMessageDiv.textContent = 'Agent: ' + replyText;
+      botMessageDiv.classList.add('bot-message');
+      chatOutput.appendChild(botMessageDiv);
+    }
+  } catch (err) {
+    console.error('Error calling /handle-form:', err);
+    const errDiv = document.createElement('div');
+    errDiv.textContent = 'Agent: (error contacting server)';
+    errDiv.classList.add('bot-message');
+    chatOutput.appendChild(errDiv);
+  } finally {
+    // 6) Reset UI
+    if (userInputEl) userInputEl.value = '';
+    document.getElementById('userInput').style.display = 'block';
+    document.getElementById('sttButton').style.display = 'block';
+    chatOutput.scrollTop = chatOutput.scrollHeight;
+  }
+});
 document.getElementById('sttButton').addEventListener('click', handleMicrophoneClick);
-
+document.getElementById('sendBtn').addEventListener('click', () => {
+  // call your submit handler body directly, or dispatch a cancelable submit
+  form?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+});
 </script>
 </body>
 </html>
