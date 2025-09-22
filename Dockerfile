@@ -13,3 +13,5 @@ COPY src/ /app/
 # Cloud Run injects $PORT
 ENV PORT=8080
 CMD exec gunicorn -k eventlet -w 1 -b 0.0.0.0:${PORT} app:app
+# include runtime spec
+COPY specs/registry.json /app/specs/registry.json
