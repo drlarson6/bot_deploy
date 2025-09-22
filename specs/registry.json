@@ -1,0 +1,7 @@
+{
+  "sheets.curated_2d.v1": {
+    "data_requirements": [
+      {"name": "title_hint", "type": "string", "required": true}
+    ]
+  }
+}
