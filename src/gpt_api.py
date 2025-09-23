@@ -11,9 +11,9 @@ def chat_with_gpt(prompt: str) -> str:
 HISTORY_FILE = "chat_history.json"
 chat_history = []
 
-if os.path.exists(HISTORY_FILE):
-    with open(HISTORY_FILE, "r") as f:
-        chat_history = json.load(f)
+#if os.path.exists(HISTORY_FILE):
+#    with open(HISTORY_FILE, "r") as f:
+#        chat_history = json.load(f)
 
 print("Chat with GPT-4o. Type 'exit' to quit.\n")
 
@@ -34,5 +34,5 @@ while True:
 
     chat_history.append({"role": "assistant", "content": reply})
 
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(chat_history, f, indent=2)
+    #with open(HISTORY_FILE, "w") as f:
+    #    json.dump(chat_history, f, indent=2)

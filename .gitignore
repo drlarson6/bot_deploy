@@ -1,3 +1,4 @@
 chat_history.json
 chat_history.json
-specs/
+specs/*
+!specs/registry.json

@@ -824,6 +824,12 @@ def decision_tree(intent_name, dialogflow_response):
 def ask_gpt():
     global last_prompt, last_reply
 
+    payload = request.get_json(silent=True) or {}
+    text = payload.get("text") or request.form.get("text") or request.values.get("text")
+    if not text:
+        return jsonify({"error": "missing text"}), 400
+
+
     data = request.get_json()
     prompt = (data.get('prompt') or data.get('text') or '').strip()
 
