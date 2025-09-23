@@ -12,7 +12,7 @@ from router import handle_session_text_router, Ctx
 USE_NEW_ROUTER = True  # toggle the new router on/off for testing
 
 from session_state import session, SessionType
-# import or reference your app/flask instance, chat_with_gpt, and call_sheets_action from wherever they actually live
+# import or reference your app/flask instance, ask_gpt, and call_sheets_action from wherever they actually live
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -48,7 +48,7 @@ import threading
 
 import re
 from google.cloud import translate
-from chat_gpt4o import chat_with_gpt, log_chat_to_history, handle_control_signal
+from chat_gpt4o import ask_gpt, chat_with_gpt, handle_control_signal
 from google.cloud import texttospeech
 
 with open(os.path.join("specs", "registry.json")) as f:
@@ -350,8 +350,8 @@ def handle_session_text(user_text: str):
         ctx = Ctx(
             session=session,
             SessionType=SessionType,
-            app=app,  # your Flask app instance
-            chat_with_gpt=chat_with_gpt,
+            chat_with_gpt=chat_with_gpt,  # ✅ matches router.Ctx
+            #ask_gpt=ask_gpt,
             call_sheets_action=call_sheets_action,
         )
         return handle_session_text_router(user_text, ctx)
@@ -450,13 +450,13 @@ def handle_session_text_legacy(user_text):
             return True, reply
 
         # Spreadsheet GPT fallback
-        reply, _ = chat_with_gpt(user_text)
+        reply, _ = ask_gpt(user_text)
         _append_log(user_text, reply)
         return True, reply
 
     if session.type == SessionType.DEVIATION:
         # Deviation GPT fallback (as you already had)
-        reply, _ = chat_with_gpt(user_text)
+        reply, _ = ask_gpt(user_text)
         _append_log(user_text, reply)
         return True, reply
 
@@ -553,9 +553,9 @@ def record_and_transcribe():
 
     # HARD BLOCK: if deviation session is active, skip Dialogflow entirely
     if session.mode:
-        response_text, _ = chat_with_gpt(transcript or "(no speech)")
-        if (transcript or "").strip():
-            log_chat_to_history(transcript, response_text)
+        response_text, _ = ask_gpt(transcript or "(no speech)")
+        #if (transcript or "").strip():
+        #    log_chat_to_history(transcript, response_text)
         payload = [{
             'transcript': transcript,
             'response_text': response_text,
@@ -576,7 +576,7 @@ def record_and_transcribe():
             intent = ((qr.get("intent") or {}).get("displayName") or "").strip()
             response_text = (qr.get("fulfillmentText") or "").strip()
         else:
-            response_text, _ = chat_with_gpt(transcript or "(no speech)")
+            response_text, _ = ask_gpt(transcript or "(no speech)")
         # Drop huge audio field if present
         if isinstance(df, dict) and 'outputAudio' in df:
             df = {k: v for k, v in df.items() if k != 'outputAudio'}
@@ -627,11 +627,11 @@ def record_and_transcribe():
 
     if not response_text:
         # Fallback to GPT
-        response_text, _ = chat_with_gpt(transcript or "(no speech)")
+        response_text, _ = ask_gpt(transcript or "(no speech)")
 
     # ✅ Log the turn
-    if (transcript or "").strip():
-        log_chat_to_history(transcript, response_text)
+    #if (transcript or "").strip():
+    #    log_chat_to_history(transcript, response_text)
     else:
         print("⚠️ Skipping log: transcript is empty")
 
@@ -846,15 +846,15 @@ def ask_gpt():
             if prompt == last_prompt:
                 return jsonify({'reply': last_reply})
 
-            reply, _ = chat_with_gpt(prompt)
+            reply, _ = ask_gpt(prompt)
             last_prompt = prompt
             last_reply = reply
-            log_chat_to_history(prompt, reply)
+            #log_chat_to_history(prompt, reply)
             return jsonify({'reply': reply}), 200
 
         else:
             # Pre-session → Dialogflow
-            df_reply = send_to_dialogflow_text(prompt)  # wrapper returns plain string
+            #df_reply = send_to_dialogflow_text(prompt)  # wrapper returns plain string
             return jsonify({'reply': df_reply}), 200
 
     except Exception as e:
@@ -889,7 +889,7 @@ def handle_form():
 
     # 1) Ask Dialogflow first
     try:
-        df = send_to_dialogflow(user_input)
+        #df = send_to_dialogflow(user_input)
         qr = (df or {}).get('queryResult', {}) or {}
         intent = (qr.get('intent') or {}).get('displayName', '') or ''
         text = qr.get('fulfillmentText') or ''
@@ -921,7 +921,7 @@ def handle_form():
         app.logger.warning(f'DF error: {e} (falling back to GPT)')
 
     # 2) Fallback: GPT
-    reply, _ = chat_with_gpt(user_input)
+    reply, _ = ask_gpt(user_input)
     return jsonify({'response': reply}), 200
 
 

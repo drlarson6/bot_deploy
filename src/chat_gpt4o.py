@@ -54,7 +54,7 @@ def ask_gpt():
         return jsonify({'reply': '(An error occurred.)'}), 500
 
     # ✅ Always log AFTER GPT reply is retrieved
-    #log_chat_to_history(prompt, reply_text)
+    log_chat_to_history(prompt, reply_text)
 
     return jsonify({'reply': reply})
 
@@ -107,35 +107,6 @@ def log_chat_to_history(user_text, bot_reply):
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     })    
 
-def log_chat_to_history(user_text, bot_reply):
-    print(f"🟢 FORCED LOG: user_text='{user_text}', bot_reply='{bot_reply}'")
-
-    entry = {
-        "timestamp": datetime.now().isoformat(),
-        "prompt": user_text,
-        "reply": bot_reply
-    }
-
-    try:
-        #history = []
-        #if os.path.exists(HISTORY_FILE):
-        #    with open(HISTORY_FILE, "r") as f:
-        #        try:
-        #            history = json.load(f)
-        #        except json.JSONDecodeError:
-        #            print("⚠️ Corrupted JSON detected. Starting fresh.")
-
-        #history.append(entry)
-
-        #with open(HISTORY_FILE, "w") as f:
-        #    json.dump(history, f, indent=2)
-        #    f.flush()
-        #    os.fsync(f.fileno())
-
-        print("✅ LOGGING SUCCESSFUL")
-
-    except Exception as e:
-        print("❌ Logging failed:", e)
 
 def handle_control_signal(control_json):
     try:
