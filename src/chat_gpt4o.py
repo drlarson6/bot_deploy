@@ -96,7 +96,10 @@ import datetime
 
 chat_history = []
 
+print("🟢 Preparing to enter log_chat_to_history()")
+
 def log_chat_to_history(user_text, bot_reply):
+    print("🟢 ENTERED log_chat_to_history()")
     global chat_history
     chat_history.append({
         "prompt": user_text,
