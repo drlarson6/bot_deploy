@@ -68,6 +68,31 @@ logging.basicConfig(level=logging.INFO)
 import json, datetime
 from google.cloud import storage
 
+BUCKET_NAME = "zelora-prod-sessions"
+
+def log_to_gcs(user_input: str, reply: str):
+    try:
+        client = storage.Client()
+        bucket = client.bucket(BUCKET_NAME)
+        # file per day
+        fname = f"sessions/daily-{datetime.date.today().isoformat()}.jsonl"
+        blob = bucket.blob(fname)
+
+        line = json.dumps({
+            "ts": datetime.datetime.utcnow().isoformat() + "Z",
+            "input": user_input,
+            "reply": reply,
+        }) + "\n"
+
+        # append (compose object if already exists)
+        if blob.exists():
+            old = blob.download_as_text()
+            blob.upload_from_string(old + line, content_type="application/json")
+        else:
+            blob.upload_from_string(line, content_type="application/json")
+    except Exception as e:
+        app.logger.warning(f"GCS log failed: {e}")
+
 _storage_client = storage.Client()
 _sessions_bucket = _storage_client.bucket("zelora-prod-sessions")
 
@@ -987,6 +1012,12 @@ def handle_form():
         app.logger.warning(f"⚠️ GCS logging failed (GPT): {e}")
 
     app.logger.info(f"LOG_CHAT v0 q={user_input!r} r={reply!r}")    
+
+    reply, _ = ask_gpt(user_input)
+    try:
+        log_to_gcs(user_input, reply)
+    except Exception as e:
+        app.logger.warning(f"Logging skipped: {e}")
 
     return jsonify({'response': reply}), 200
 
