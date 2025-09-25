@@ -986,6 +986,8 @@ def handle_form():
     except Exception as e:
         app.logger.warning(f"⚠️ GCS logging failed (GPT): {e}")
 
+    app.logger.info(f"LOG_CHAT v0 q={user_input!r} r={reply!r}")    
+
     return jsonify({'response': reply}), 200
 
 @app.route('/control-hook', methods=['POST'])
