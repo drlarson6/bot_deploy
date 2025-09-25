@@ -1,8 +1,8 @@
 # router.py (keep only these)
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Tuple
-from session_store import SessionStore
-from actions import spreadsheet_registry  # wherever your registry lives
+from .session_store import SessionStore
+from .actions import spreadsheet_registry  # wherever your registry lives
 import re
 
 @dataclass
