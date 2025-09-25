@@ -347,13 +347,16 @@ def debug_state():
 
 def handle_session_text(user_text: str):
     if USE_NEW_ROUTER:
+        app.logger.info(f"🧪 Ctx fields at runtime: {list(Ctx.__dataclass_fields__.keys())}")
+        # src/app.py  (inside handle_session_text)
         ctx = Ctx(
             session=session,
             SessionType=SessionType,
-            chat_with_gpt=chat_with_gpt,  # ✅ matches router.Ctx
-            #ask_gpt=ask_gpt,
+            app=app,                     # ← REQUIRED
+            chat_with_gpt=chat_with_gpt,
             call_sheets_action=call_sheets_action,
         )
+        app.logger.info("🧭 using NEW router w/ app in Ctx")
         return handle_session_text_router(user_text, ctx)
     return handle_session_text_legacy(user_text)
 
