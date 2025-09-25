@@ -349,14 +349,22 @@ def handle_session_text(user_text: str):
     if USE_NEW_ROUTER:
         app.logger.info(f"🧪 Ctx fields at runtime: {list(Ctx.__dataclass_fields__.keys())}")
         # src/app.py  (inside handle_session_text)
-        ctx = Ctx(
+                # Build Ctx defensively in case router.Ctx signature differs across revisions
+        import inspect as _inspect
+        _ctx_kwargs = dict(
             session=session,
             SessionType=SessionType,
-            app=app,                     # ← REQUIRED
             chat_with_gpt=chat_with_gpt,
             call_sheets_action=call_sheets_action,
         )
-        app.logger.info("🧭 using NEW router w/ app in Ctx")
+        try:
+            _sig = _inspect.signature(Ctx)
+            if 'app' in _sig.parameters:
+                _ctx_kwargs['app'] = app
+        except Exception as _e:
+            print(f"⚠️ Could not inspect Ctx signature: {_e}")
+        ctx = Ctx(**_ctx_kwargs)
+app.logger.info("🧭 using NEW router w/ app in Ctx")
         return handle_session_text_router(user_text, ctx)
     return handle_session_text_legacy(user_text)
 
