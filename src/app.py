@@ -9,7 +9,7 @@ from flask import current_app, send_from_directory
 from tts_bytes import synthesize_to_bytes  # import the helper above
 
 from src.router import handle_session_text_router, Ctx
-USE_NEW_ROUTER = True  # toggle the new router on/off for testing
+app.logger.info(f"Loaded router from: {handle_session_text_router.__module__}")USE_NEW_ROUTER = True  # toggle the new router on/off for testing
 
 from session_state import session, SessionType
 # import or reference your app/flask instance, ask_gpt, and call_sheets_action from wherever they actually live
