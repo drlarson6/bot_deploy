@@ -8,7 +8,7 @@ from flask import current_app, send_from_directory
 
 from tts_bytes import synthesize_to_bytes  # import the helper above
 
-from router import handle_session_text_router, Ctx
+from src.router import handle_session_text_router, Ctx
 USE_NEW_ROUTER = True  # toggle the new router on/off for testing
 
 from session_state import session, SessionType
