@@ -3,15 +3,14 @@ from uuid import uuid4
 from datetime import datetime, timezone
 import logging
 import traceback
-from session_state import session, SessionType
+from .session_state import session, SessionType
 from flask import current_app, send_from_directory
 
-from tts_bytes import synthesize_to_bytes  # import the helper above
-
+from .tts_bytes import synthesize_to_bytes
 from .router import handle_session_text_router, Ctx
 USE_NEW_ROUTER = True  # toggle the new router on/off for testing
 
-from session_state import session, SessionType
+from .session_state import session, SessionType
 # import or reference your app/flask instance, ask_gpt, and call_sheets_action from wherever they actually live
 
 from dotenv import load_dotenv
@@ -23,7 +22,7 @@ import logging
 from wsgiref import headers
 from flask import Flask, request, jsonify, render_template, send_file, Response
 
-from search_and_email import (
+from .search_and_email import (
     read_sheet_and_send_email, spreadsheet_id, range_name,
     create_google_sheet_min,   # ← add this
     append_rows,
@@ -48,8 +47,11 @@ import threading
 
 import re
 from google.cloud import translate
-from chat_gpt4o import ask_gpt, chat_with_gpt, handle_control_signal
-from google.cloud import texttospeech
+from .chat_gpt4o import ask_gpt, chat_with_gpt, handle_control_signal
+from google.cloud import texttospeech, storage
+
+USE_GCS_LOG = os.getenv("USE_GCS_LOG", "0") == "1"
+SESSIONS_BUCKET = os.getenv("SESSIONS_BUCKET", "zelora-prod-sessions")
 
 with open(os.path.join("specs", "registry.json")) as f:
     REGISTRY = json.load(f)
@@ -59,8 +61,32 @@ with open(os.path.join(os.path.dirname(__file__), "sheet_actions.json")) as f:
     SHEET_ACTIONS = {a["name"]: a for a in json.load(f)}
 
 #client = texttospeech.TextToSpeechClient()
-from tts_google import synthesize_to_file
+from .tts_google import synthesize_to_file
 logging.basicConfig(level=logging.INFO)
+
+# --- minimal GCS JSONL logger ---
+import json, datetime
+from google.cloud import storage
+
+_storage_client = storage.Client()
+_sessions_bucket = _storage_client.bucket("zelora-prod-sessions")
+
+def _append_log_entry(entry: dict):
+    """
+    Append a JSON line to a daily JSONL file in GCS.
+    Simple & safe: download current content (if any), append one line, upload.
+    """
+    ts = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    line = json.dumps({"t": ts, **entry}) + "\n"
+    blob_name = f"sessions/daily-{datetime.date.today().isoformat()}.jsonl"
+    blob = _sessions_bucket.blob(blob_name)
+
+    try:
+        existing = blob.download_as_text()
+    except Exception:
+        existing = ""
+    blob.upload_from_string(existing + line, content_type="application/jsonl")
+# --- end minimal GCS JSONL logger ---
 
 CONFIDENCE_THRESHOLD = float(os.getenv("DF_CONF_THRESHOLD", "0.85"))
 CONFIRM_CONTEXT = "awaiting_deviation_confirmation"
@@ -880,58 +906,87 @@ def log_microphone_state():
 
 @app.route('/handle-form', methods=['POST'])
 def handle_form():
-    #global session.mode  # local fallback if control hook hiccups
     user_input = request.form.get('user_input', '').strip()
-
-    # 0) Intercept if we’re in GPT-only session (or ending it)
-    handled, reply = handle_session_text(user_input)
-    if handled:
-        return jsonify({'response': reply}), 200
 
     if not user_input:
         return jsonify({'response': '(No input)'}), 200
 
-    # 1) Ask Dialogflow first
+    # 0) Route active session first
+    handled, reply = handle_session_text(user_input)
+    if handled:
+        # ### NEW: log Q/A for session-routed replies
+        try:
+            _append_log_entry({"type": "q", "data": user_input})
+            _append_log_entry({"type": "a", "data": reply})
+        except Exception as e:
+            app.logger.warning(f"⚠️ GCS logging failed (session): {e}")
+        return jsonify({'response': reply}), 200
+
+    # 1) (Optional) Dialogflow first
+    df = None  # ### NEW: avoid UnboundLocal if DF call is commented
     try:
-        #df = send_to_dialogflow(user_input)
+        # df = send_to_dialogflow(user_input)  # (intentionally disabled)
         qr = (df or {}).get('queryResult', {}) or {}
         intent = (qr.get('intent') or {}).get('displayName', '') or ''
         text = qr.get('fulfillmentText') or ''
 
         # --- Deviation intents handling ---
         if intent == 'startDeviationSession':
-            # Let DF ask the confirmation; no switch yet
-            return jsonify({'response': text}), 200
+            reply = text or "Okay, let's begin."
+            try:
+                _append_log_entry({"type": "q", "data": user_input})
+                _append_log_entry({"type": "a", "data": reply})
+            except Exception as e:
+                app.logger.warning(f"⚠️ GCS logging failed (DF start): {e}")
+            return jsonify({'response': reply}), 200
 
         if intent == 'confirm.start.no':
-            # User declined; remain in DF mode
-            return jsonify({'response': text or "Okay, not starting a session."}), 200
+            reply = text or "Okay, not starting a session."
+            try:
+                _append_log_entry({"type": "q", "data": user_input})
+                _append_log_entry({"type": "a", "data": reply})
+            except Exception as e:
+                app.logger.warning(f"⚠️ GCS logging failed (DF no): {e}")
+            return jsonify({'response': reply}), 200
 
         if intent == 'confirm.start.yes':
-            # Flip the switch via control hook (single source of truth)
             try:
                 requests.post(CONTROL_HOOK_URL, json={"action": "start_session"}, timeout=2.5)
             except Exception as e:
-                # Failsafe so you aren't stuck in DF
                 app.logger.warning(f'Control hook failed: {e}; enabling session locally.')
                 session.mode = True
-            return jsonify({'response': "Starting a deviation session now. I’ll guide you through the interview."}), 200
+            reply = "Starting a deviation session now. I’ll guide you through the interview."
+            try:
+                _append_log_entry({"type": "q", "data": user_input})
+                _append_log_entry({"type": "a", "data": reply})
+            except Exception as e:
+                app.logger.warning(f"⚠️ GCS logging failed (DF yes): {e}")
+            return jsonify({'response': reply}), 200
 
         # Not our deviation flow → return DF text if present
         if text:
-            return jsonify({'response': text}), 200
+            reply = text
+            try:
+                _append_log_entry({"type": "q", "data": user_input})
+                _append_log_entry({"type": "a", "data": reply})
+            except Exception as e:
+                app.logger.warning(f"⚠️ GCS logging failed (DF text): {e}")
+            return jsonify({'response': reply}), 200
 
     except Exception as e:
         app.logger.warning(f'DF error: {e} (falling back to GPT)')
 
     # 2) Fallback: GPT
-    reply, _ = ask_gpt(user_input)
+    reply, _ = ask_gpt(user_input)  # or chat_with_gpt(user_input)
+
+    # ### NEW: log GPT Q/A
+    try:
+        _append_log_entry({"type": "q", "data": user_input})
+        _append_log_entry({"type": "a", "data": reply})
+    except Exception as e:
+        app.logger.warning(f"⚠️ GCS logging failed (GPT): {e}")
+
     return jsonify({'response': reply}), 200
-
-
-#from uuid4 import uuid4            # (leave as-is if already present)
-#from datetime import datetime     # (leave as-is if already present)
-
 
 @app.route('/control-hook', methods=['POST'])
 def control_hook():
@@ -1732,7 +1787,36 @@ def _sio_user_transcript(data):
         emit("bot_message", {"text": "(error processing message)"})
 # === end Socket.IO handlers ===
 
+_storage_client = None
+def _gcs():
+    global _storage_client
+    if _storage_client is None:
+        _storage_client = storage.Client()
+    return _storage_client
 
+def _append_log(q, r, session_id=None):
+    if not USE_GCS_LOG:
+        return
+    try:
+        session_id = session_id or str(uuid.uuid4())
+        obj = {
+            "t": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "type": "q", "data": q
+        }
+        obj2 = {
+            "t": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "type": "a", "data": r
+        }
+        bucket = _gcs().bucket(SESSIONS_BUCKET)
+        blob = bucket.blob(f"sessions/{session_id}.jsonl")
+        # append by read+write (cheap & simple for low volume)
+        prev = b""
+        if blob.exists():
+            prev = blob.download_as_bytes()
+        new = (prev + (json.dumps(obj)+"\n"+json.dumps(obj2)+"\n").encode("utf-8"))
+        blob.upload_from_string(new, content_type="application/jsonl")
+    except Exception as e:
+        app.logger.exception(f"GCS append_log failed: {e}")
     
 # Detect Cloud Run environment
 IS_CLOUDRUN = bool(os.getenv("K_SERVICE"))
