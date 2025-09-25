@@ -8,10 +8,10 @@ RUN pip install --no-cache-dir -r /app/requirements.txt \
     && pip install --no-cache-dir gunicorn eventlet
 
 # Copy the app source
-COPY src/ /app/
+COPY . /app/
 
 # Cloud Run injects $PORT
 ENV PORT=8080
-CMD exec gunicorn -k eventlet -w 1 -b 0.0.0.0:${PORT} app:app
+CMD exec gunicorn -k eventlet -w 1 -b 0.0.0.0:${PORT} src.app:app
 # include runtime spec
-COPY specs/registry.json /app/specs/registry.json
+# COPY specs/registry.json /app/specs/registry.json

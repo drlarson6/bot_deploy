@@ -8,8 +8,8 @@ from flask import current_app, send_from_directory
 
 from tts_bytes import synthesize_to_bytes  # import the helper above
 
-from src.router import handle_session_text_router, Ctx
-app.logger.info(f"Loaded router from: {handle_session_text_router.__module__}")USE_NEW_ROUTER = True  # toggle the new router on/off for testing
+from .router import handle_session_text_router, Ctx
+USE_NEW_ROUTER = True  # toggle the new router on/off for testing
 
 from session_state import session, SessionType
 # import or reference your app/flask instance, ask_gpt, and call_sheets_action from wherever they actually live
@@ -87,6 +87,7 @@ last_reply  = None
 translate_client = translate.TranslationServiceClient()
 
 app = Flask(__name__)
+app.logger.info(f"Loaded router from: {handle_session_text_router.__module__}")
 
 
 @app.route("/robots.txt")
@@ -349,22 +350,14 @@ def handle_session_text(user_text: str):
     if USE_NEW_ROUTER:
         app.logger.info(f"🧪 Ctx fields at runtime: {list(Ctx.__dataclass_fields__.keys())}")
         # src/app.py  (inside handle_session_text)
-                # Build Ctx defensively in case router.Ctx signature differs across revisions
-        import inspect as _inspect
-        _ctx_kwargs = dict(
+        ctx = Ctx(
             session=session,
             SessionType=SessionType,
+            app=app,                     # ← REQUIRED
             chat_with_gpt=chat_with_gpt,
             call_sheets_action=call_sheets_action,
         )
-        try:
-            _sig = _inspect.signature(Ctx)
-            if 'app' in _sig.parameters:
-                _ctx_kwargs['app'] = app
-        except Exception as _e:
-            print(f"⚠️ Could not inspect Ctx signature: {_e}")
-        ctx = Ctx(**_ctx_kwargs)
-app.logger.info("🧭 using NEW router w/ app in Ctx")
+        app.logger.info("🧭 using NEW router w/ app in Ctx")
         return handle_session_text_router(user_text, ctx)
     return handle_session_text_legacy(user_text)
 
