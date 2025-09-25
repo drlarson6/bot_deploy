@@ -68,6 +68,9 @@ logging.basicConfig(level=logging.INFO)
 import json, datetime
 from google.cloud import storage
 
+from gcs_logger import append_jsonl
+
+
 BUCKET_NAME = "zelora-prod-sessions"
 
 def log_to_gcs(user_input: str, reply: str):
@@ -933,46 +936,26 @@ def log_microphone_state():
 def handle_form():
     user_input = request.form.get('user_input', '').strip()
 
+    # 0) Intercept if we’re in GPT-only session (or ending it)
+    handled, reply = handle_session_text(user_input)
+    if handled:
+        return jsonify({'response': reply}), 200
+
     if not user_input:
         return jsonify({'response': '(No input)'}), 200
 
-    # 0) Route active session first
-    handled, reply = handle_session_text(user_input)
-    if handled:
-        # ### NEW: log Q/A for session-routed replies
-        try:
-            _append_log_entry({"type": "q", "data": user_input})
-            _append_log_entry({"type": "a", "data": reply})
-        except Exception as e:
-            app.logger.warning(f"⚠️ GCS logging failed (session): {e}")
-        return jsonify({'response': reply}), 200
-
-    # 1) (Optional) Dialogflow first
-    df = None  # ### NEW: avoid UnboundLocal if DF call is commented
+    # 1) Ask Dialogflow first
     try:
-        # df = send_to_dialogflow(user_input)  # (intentionally disabled)
+        # df = send_to_dialogflow(user_input)
         qr = (df or {}).get('queryResult', {}) or {}
         intent = (qr.get('intent') or {}).get('displayName', '') or ''
         text = qr.get('fulfillmentText') or ''
 
-        # --- Deviation intents handling ---
         if intent == 'startDeviationSession':
-            reply = text or "Okay, let's begin."
-            try:
-                _append_log_entry({"type": "q", "data": user_input})
-                _append_log_entry({"type": "a", "data": reply})
-            except Exception as e:
-                app.logger.warning(f"⚠️ GCS logging failed (DF start): {e}")
-            return jsonify({'response': reply}), 200
+            return jsonify({'response': text}), 200
 
         if intent == 'confirm.start.no':
-            reply = text or "Okay, not starting a session."
-            try:
-                _append_log_entry({"type": "q", "data": user_input})
-                _append_log_entry({"type": "a", "data": reply})
-            except Exception as e:
-                app.logger.warning(f"⚠️ GCS logging failed (DF no): {e}")
-            return jsonify({'response': reply}), 200
+            return jsonify({'response': text or "Okay, not starting a session."}), 200
 
         if intent == 'confirm.start.yes':
             try:
@@ -980,44 +963,23 @@ def handle_form():
             except Exception as e:
                 app.logger.warning(f'Control hook failed: {e}; enabling session locally.')
                 session.mode = True
-            reply = "Starting a deviation session now. I’ll guide you through the interview."
-            try:
-                _append_log_entry({"type": "q", "data": user_input})
-                _append_log_entry({"type": "a", "data": reply})
-            except Exception as e:
-                app.logger.warning(f"⚠️ GCS logging failed (DF yes): {e}")
-            return jsonify({'response': reply}), 200
+            return jsonify({'response': "Starting a deviation session now. I’ll guide you through the interview."}), 200
 
-        # Not our deviation flow → return DF text if present
         if text:
-            reply = text
-            try:
-                _append_log_entry({"type": "q", "data": user_input})
-                _append_log_entry({"type": "a", "data": reply})
-            except Exception as e:
-                app.logger.warning(f"⚠️ GCS logging failed (DF text): {e}")
-            return jsonify({'response': reply}), 200
+            return jsonify({'response': text}), 200
 
     except Exception as e:
         app.logger.warning(f'DF error: {e} (falling back to GPT)')
 
     # 2) Fallback: GPT
-    reply, _ = ask_gpt(user_input)  # or chat_with_gpt(user_input)
-
-    # ### NEW: log GPT Q/A
-    try:
-        _append_log_entry({"type": "q", "data": user_input})
-        _append_log_entry({"type": "a", "data": reply})
-    except Exception as e:
-        app.logger.warning(f"⚠️ GCS logging failed (GPT): {e}")
-
-    app.logger.info(f"LOG_CHAT v0 q={user_input!r} r={reply!r}")    
-
     reply, _ = ask_gpt(user_input)
+
+    # --- GCS logging (best effort) ---
     try:
-        log_to_gcs(user_input, reply)
+        from gcs_logger import append_jsonl
+        append_jsonl(user_input, reply, meta={"src": "handle-form"})
     except Exception as e:
-        app.logger.warning(f"Logging skipped: {e}")
+        app.logger.warning(f"GCS logging skipped: {e}")
 
     return jsonify({'response': reply}), 200
 
