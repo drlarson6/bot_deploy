@@ -145,7 +145,8 @@ app = Flask(__name__)
 
 @app.after_request
 def add_revision_header(resp):
-    resp.headers["X-Served-By"] = os.environ.get("K_REVISION", "unknown")
+    rev = os.getenv("K_REVISION", "unknown")
+    resp.headers["X-Revision"] = rev
     return resp
 
 app.logger.info(f"Loaded router from: {handle_session_text_router.__module__}")
@@ -946,25 +947,30 @@ def handle_form():
     # 0) Intercept if we’re in GPT-only session (or ending it)
     handled, reply = handle_session_text(user_input)
     if handled:
+        # --- Firestore logging (best effort) ---
+        try:
+            try:
+                from firestore_logger import append_log as _firelog
+            except ImportError:
+                from firestore_logger import log_chat as _firelog
+            _firelog(user_input, reply, meta={"src": "handle-form", "path": "handled"})
+        except Exception as e:
+            app.logger.warning(f"Firestore logging skipped (handled): {e}")
         return jsonify({'response': reply}), 200
 
     if not user_input:
         return jsonify({'response': '(No input)'}), 200
 
-    # 1) Dialogflow (optional)
+    # 1) Dialogflow (optional; keep your current behavior)
     try:
-        df = None  # ensure defined even if you skip DF
-        # df = send_to_dialogflow(user_input)  # uncomment when ready
+        # df = send_to_dialogflow(user_input)
         qr = (df or {}).get('queryResult', {}) or {}
         intent = (qr.get('intent') or {}).get('displayName', '') or ''
         text = qr.get('fulfillmentText') or ''
-
         if intent == 'startDeviationSession':
             return jsonify({'response': text}), 200
-
         if intent == 'confirm.start.no':
             return jsonify({'response': text or "Okay, not starting a session."}), 200
-
         if intent == 'confirm.start.yes':
             try:
                 requests.post(CONTROL_HOOK_URL, json={"action": "start_session"}, timeout=2.5)
@@ -972,34 +978,23 @@ def handle_form():
                 app.logger.warning(f'Control hook failed: {e}; enabling session locally.')
                 session.mode = True
             return jsonify({'response': "Starting a deviation session now. I’ll guide you through the interview."}), 200
-
         if text:
             return jsonify({'response': text}), 200
-
     except Exception as e:
         app.logger.warning(f'DF error: {e} (falling back to GPT)')
 
     # 2) Fallback: GPT
-
-    # 3) Firestore log (best-effort) 
-
-    from firestore_logger import log_chat   # or `append_log` if that’s the version you kept
     reply, _ = ask_gpt(user_input)
 
+    # --- Firestore logging (best effort) ---
     try:
-        app.logger.info("📝 Firestore logging: start")
-        log_chat(user_input, reply, meta={"src": "handle-form"})
-        app.logger.info("✅ Firestore logging: appended")
-
+        try:
+            from firestore_logger import append_log as _firelog
+        except ImportError:
+            from firestore_logger import log_chat as _firelog
+        _firelog(user_input, reply, meta={"src": "handle-form", "path": "gpt"})
     except Exception as e:
-        app.logger.warning(f"Firestore logging skipped: {e}")
-
-    # 4) GCS logging (optional best-effort)
-    try:
-        from gcs_logger import append_jsonl
-        append_jsonl(user_input, reply, meta={"src": "handle-form"})
-    except Exception as e:
-        app.logger.warning(f"GCS logging skipped: {e}")
+        app.logger.warning(f"Firestore logging skipped (gpt): {e}")
 
     return jsonify({'response': reply}), 200
 
