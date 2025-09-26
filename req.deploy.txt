@@ -28,5 +28,7 @@ httplib2==0.22.0
 requests==2.31.0
 httpx==0.28.1
 python-dotenv==1.1.1
-bidict==0.23.1google-cloud-storage>=2.18.0
+bidict==0.23.1
 google-cloud-storage>=2.18.0
+google-cloud-storage>=2.18.0
+google-cloud-firestore==2.16.0
