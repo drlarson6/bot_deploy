@@ -1,145 +1,160 @@
-from google.oauth2.credentials import Credentials
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from email.mime.text import MIMEText
-import base64
-import secrets
-import string
-import os, json
-from google.oauth2.credentials import Credentials
+# src/search_and_email.py
+"""
+Safe Gmail/Calendar helpers for both local dev and Cloud Run.
+
+- Local dev: set env LOCAL_DEV_GMAIL=1 and place a user OAuth token at ./token.json
+- Cloud Run: no token.json; functions become no-ops that return safe fallbacks.
+  (Prevents crashes when these features aren't configured.)
+"""
+
+from __future__ import annotations
+import os
+from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+
+# Scopes used when LOCAL_DEV_GMAIL=1 and token.json exists
+GMAIL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+]
+CAL_SCOPES = [
+    "https://www.googleapis.com/auth/calendar.readonly",
+]
+
+# Lazy imports only when needed (to avoid heavy deps / crashes)
+def _try_import_google():
+    from google.oauth2.credentials import Credentials  # type: ignore
+    from googleapiclient.discovery import build  # type: ignore
+    return Credentials, build
 
 
-# ... other imports ...
-
-# Define the SCOPES
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/gmail.send']
-from googleapiclient.discovery import build
-
-# Load credentials and create a service object
+def _have_local_token() -> bool:
+    return os.getenv("LOCAL_DEV_GMAIL", "0") == "1" and os.path.exists("token.json")
 
 
-token_env = os.environ.get("GMAIL_TOKEN_JSON")
-if token_env:
-    creds = Credentials.from_authorized_user_info(json.loads(token_env), SCOPES)
-else:
-    creds = Credentials.from_authorized_user_file('token.json', SCOPES)  # local dev fallback
-
-#creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-
-
-service = build('sheets', 'v4', credentials=creds)
-
-# ... rest of your script ...
-# Import necessary libraries
-# ... other imports ...
-
-# Define your spreadsheet ID and range name here
-spreadsheet_id = '1lhFA6qcIohjkktNVXPqnNgocn7XfkOgU6CCzvaY1cPk'
-range_name = 'Operators!A2:C31'
-
-#new code
-#search_name = 'Doug'
-#end new code
-
-# Function to generate a random new_r_code
-def generate_random_r_code(length):
-    # Define the characters that can be used in the new_r_code
-    characters = string.ascii_letters + string.digits + string.punctuation
-    # Generate a random new_r_code
-    new_r_code = ''.join(secrets.choice(characters) for i in range(length))
-    return new_r_code
-
-# Specify the length of the new_r_code
-r_code_length = 8  # You can choose any length
-
-# Function to write back to the spreadsheet
-def update_sheet(service, spreadsheet_id, range_name, value):
-    body = {
-        'values': [value]
-    }
-    result = service.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id, range=range_name,
-        valueInputOption='USER_ENTERED', body=body).execute()
-    print(f"{result.get('updatedCells')} cells updated.")
+def _load_local_user_creds(scopes: List[str]):
+    """
+    Local-only: load OAuth user credentials from token.json.
+    Never called automatically in Cloud Run.
+    """
+    Credentials, build = _try_import_google()
+    creds = Credentials.from_authorized_user_file("token.json", scopes)
+    return creds
 
 
-# Assuming 'service' is defined and authorized elsewhere in your script
-# Now you can call your function with the service and spreadsheet ID
-#New code
+# ---------- Public: service builders (lazy & safe) ----------
 
-# ... other imports and setup ...
-
-def create_message(sender, to, subject, message_text):
-    message = MIMEText(message_text)
-    message['to'] = to
-    message['from'] = sender
-    message['subject'] = subject
-    raw_message = base64.urlsafe_b64encode(message.as_bytes())
-    return {
-        'raw': raw_message.decode('utf-8')
-    }
-
-def send_email(service, user_id, message):
-    try:
-        message = (service.users().messages().send(userId=user_id, body=message).execute())
-        print('Message Id: %s' % message['id'])
-        return message
-    except Exception as e:#
-        print(f'An error occurred: {e}')
+def get_gmail_service():
+    """
+    Local dev: returns a Gmail service if token.json exists and LOCAL_DEV_GMAIL=1.
+    Cloud Run / no token: returns None.
+    """
+    if not _have_local_token():
         return None
-
-def read_sheet_and_send_email(spreadsheet_id, range_name, userID, email_to):
-    #print(userID)
-
-    # Use the Sheets API to get the values from the specified range
-    sheet_service = build('sheets', 'v4', credentials=creds)
-    result = sheet_service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_name).execute()
-    values = result.get('values', [])
-
-   
-    user_found = False  # Flag to indicate if the user ID was found   
-    new_r_code = None
-    for i, row in enumerate(values, start=2): 
-        if len(row) > 0 and row[1] == userID:  # search_name
-            user_found = True  # Set the flag to True when user is found
-            print(i)
-            print(userID)
-
-            new_r_code = generate_random_r_code(r_code_length)
-            update_range = f"Operators!C{i}"  # Use the enumeration index directly
-            update_sheet(service, spreadsheet_id, update_range, [new_r_code])
-            print(f"The new random password for {userID} is {new_r_code}")
-            break
-    if not user_found:
-        print(f"{userID} not found.")
-        return {"userID": userID, "newPassword": new_r_code}
-
-    if new_r_code:
-        gmail_service = build('gmail', 'v1', credentials=creds)
-        message = create_message('drlarson6@gmail.com', email_to, 'Retrieval Code', f'The new random password for {userID} is {new_r_code}')
-
-        #print(new_r_code)
-
-        send_email(gmail_service, 'me', message)
+    Credentials, build = _try_import_google()
+    creds = _load_local_user_creds(GMAIL_SCOPES)
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
-# --- minimal add for creating a new Sheet + URL ---
-def create_google_sheet_min(title: str):
-    sheets_service = build('sheets', 'v4', credentials=creds)
-    resp = sheets_service.spreadsheets().create(
-        body={"properties": {"title": title}}
-    ).execute()
-    spreadsheet_id = resp["spreadsheetId"]
-    sheet_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
-    return spreadsheet_id, sheet_url
+def get_calendar_service():
+    """
+    Local dev: returns a Calendar service if token.json exists and LOCAL_DEV_GMAIL=1.
+    Cloud Run / no token: returns None.
+    """
+    if not _have_local_token():
+        return None
+    Credentials, build = _try_import_google()
+    creds = _load_local_user_creds(CAL_SCOPES)
+    return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
-def append_rows(spreadsheet_id: str, rows: list[list], range_: str = "Sheet1!A:Z"):
-    """Append rows to a Google Sheet."""
-    sheets_service = build('sheets', 'v4', credentials=creds)
-    return sheets_service.spreadsheets().values().append(
-        spreadsheetId=spreadsheet_id,
-        range=range_,
-        valueInputOption="USER_ENTERED",
-        insertDataOption="INSERT_ROWS",
-        body={"values": rows}
-    ).execute()
+
+# ---------- Public: high-level helpers (safe fallbacks) ----------
+
+def send_email(to: str, subject: str, body: str) -> str:
+    """
+    Local dev: sends via Gmail API.
+    Cloud Run: returns a message indicating email is disabled.
+    """
+    svc = get_gmail_service()
+    if svc is None:
+        return "(email disabled in this environment)"
+
+    from base64 import urlsafe_b64encode
+    from email.mime.text import MIMEText
+
+    msg = MIMEText(body)
+    msg["to"] = to
+    msg["subject"] = subject
+    encoded = urlsafe_b64encode(msg.as_bytes()).decode()
+
+    svc.users().messages().send(userId="me", body={"raw": encoded}).execute()  # type: ignore
+    return "sent"
+
+
+def search_gmail(query: str, max_results: int = 10) -> List[Dict[str, Any]]:
+    """
+    Local dev: searches Gmail and returns a list of message metadata.
+    Cloud Run: returns [].
+    """
+    svc = get_gmail_service()
+    if svc is None:
+        return []
+
+    res = svc.users().messages().list(userId="me", q=query, maxResults=max_results).execute()  # type: ignore
+    ids = [m["id"] for m in res.get("messages", [])]
+
+    out: List[Dict[str, Any]] = []
+    for mid in ids:
+        m = svc.users().messages().get(userId="me", id=mid, format="metadata").execute()  # type: ignore
+        headers = {h["name"].lower(): h["value"] for h in m.get("payload", {}).get("headers", [])}
+        out.append({
+            "id": mid,
+            "snippet": m.get("snippet", ""),
+            "from": headers.get("from"),
+            "subject": headers.get("subject"),
+            "date": headers.get("date"),
+        })
+    return out
+
+
+def list_calendar_events(
+    calendar_id: str = "primary",
+    time_min: Optional[str] = None,
+    max_results: int = 10,
+) -> List[Dict[str, Any]]:
+    """
+    Local dev: lists upcoming events.
+    Cloud Run: returns [].
+    """
+    svc = get_calendar_service()
+    if svc is None:
+        return []
+
+    if time_min is None:
+        time_min = datetime.now(timezone.utc).isoformat()
+
+    res = svc.events().list(
+        calendarId=calendar_id,
+        timeMin=time_min,
+        maxResults=max_results,
+        singleEvents=True,
+        orderBy="startTime",
+    ).execute()  # type: ignore
+
+    return res.get("items", [])
+
+
+# ---------- Compatibility aliases (cover common import names) ----------
+# If your app imports these specific names, they will resolve.
+search_emails = search_gmail
+list_events = list_calendar_events
+
+__all__ = [
+    "get_gmail_service",
+    "get_calendar_service",
+    "send_email",
+    "search_gmail",
+    "search_emails",
+    "list_calendar_events",
+    "list_events",
+]

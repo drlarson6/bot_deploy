@@ -49,6 +49,7 @@ import re
 from google.cloud import translate
 from .chat_gpt4o import ask_gpt, chat_with_gpt, handle_control_signal
 from google.cloud import texttospeech, storage
+from firestore_logger import append_log
 
 USE_GCS_LOG = os.getenv("USE_GCS_LOG", "0") == "1"
 SESSIONS_BUCKET = os.getenv("SESSIONS_BUCKET", "zelora-prod-sessions")
@@ -141,6 +142,12 @@ last_reply  = None
 translate_client = translate.TranslationServiceClient()
 
 app = Flask(__name__)
+
+@app.after_request
+def add_revision_header(resp):
+    resp.headers["X-Served-By"] = os.environ.get("K_REVISION", "unknown")
+    return resp
+
 app.logger.info(f"Loaded router from: {handle_session_text_router.__module__}")
 
 
@@ -944,9 +951,10 @@ def handle_form():
     if not user_input:
         return jsonify({'response': '(No input)'}), 200
 
-    # 1) Ask Dialogflow first
+    # 1) Dialogflow (optional)
     try:
-        # df = send_to_dialogflow(user_input)
+        df = None  # ensure defined even if you skip DF
+        # df = send_to_dialogflow(user_input)  # uncomment when ready
         qr = (df or {}).get('queryResult', {}) or {}
         intent = (qr.get('intent') or {}).get('displayName', '') or ''
         text = qr.get('fulfillmentText') or ''
@@ -972,9 +980,21 @@ def handle_form():
         app.logger.warning(f'DF error: {e} (falling back to GPT)')
 
     # 2) Fallback: GPT
+
+    # 3) Firestore log (best-effort) 
+
+    from firestore_logger import log_chat   # or `append_log` if that’s the version you kept
     reply, _ = ask_gpt(user_input)
 
-    # --- GCS logging (best effort) ---
+    try:
+        app.logger.info("📝 Firestore logging: start")
+        log_chat(user_input, reply, meta={"src": "handle-form"})
+        app.logger.info("✅ Firestore logging: appended")
+
+    except Exception as e:
+        app.logger.warning(f"Firestore logging skipped: {e}")
+
+    # 4) GCS logging (optional best-effort)
     try:
         from gcs_logger import append_jsonl
         append_jsonl(user_input, reply, meta={"src": "handle-form"})
